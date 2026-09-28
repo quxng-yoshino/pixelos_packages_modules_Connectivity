@@ -1799,7 +1799,9 @@ static int doLoad(char** argv, char * const envp[]) {
         // Enable JIT kallsyms export for privileged users only
         // (Note: this (open) will fail with ENOENT 'No such file or directory' if
         //  kernel does not have CONFIG_HAVE_EBPF_JIT=y)
-        if (!writeFile("/proc/sys/net/core/bpf_jit_kallsyms", "1\n")) return 25;
+        // bpf_jit_kallsyms only exists since 4.11, so only require it on 4.14+
+        if (!writeFile("/proc/sys/net/core/bpf_jit_kallsyms", "1\n") &&
+            isAtLeastKernelVersion(4, 14)) return 25;
     }
 
     // Create all the pin subdirectories
@@ -1819,7 +1821,8 @@ static int doLoad(char** argv, char * const envp[]) {
         if (!createDir("/sys/fs/bpf/loader")) return 31;
     }
 
-    if (runningAsRoot) {  // implies U QPR3+ and kernel 4.14+
+    if (runningAsRoot && isAtLeastKernelVersion(4, 14)) {  // implies U QPR3+ and kernel 4.14+
+        // (bpfGetNext{Prog,Map}Id require 4.13+, so skip this sanity check on older kernels)
         // There should not be any programs or maps yet
         errno = 0;
         uint32_t progId = bpfGetNextProgId(0);  // expect 0 with errno == ENOENT
