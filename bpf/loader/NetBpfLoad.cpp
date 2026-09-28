@@ -1606,9 +1606,12 @@ static int doLoad(char** argv, char * const envp[]) {
 
     // both S and T require kernel 4.9 (and eBpf support)
     // (this also guarantees 'kernelVer' isn't an invalid uninitialized 0)
-    if (!isAtLeastKernelVersion(4, 9)) {
-        ALOGE("Android S & T require kernel 4.9.");
+    if (!isAtLeastKernelVersion(4, 4)) {
+        ALOGE("Kernel older than 4.4 is not supported.");
         return 3;
+    }
+    if (!isAtLeastKernelVersion(4, 9)) {
+        ALOGW("Android S & T require kernel 4.9.");
     }
 
     // U bumps the kernel requirement up to 4.14
