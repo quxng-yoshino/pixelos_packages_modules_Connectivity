@@ -449,6 +449,7 @@ int readCodeSections(ElfObject& elfObj, vector<codeSection>& cs) {
 
 static unsigned int sanitizeMapFlags(unsigned int map_flags) {
     if (!isAtLeastKernelVersion(5, 10)) map_flags &= ~BPF_F_MMAPABLE;
+    if (!isAtLeastKernelVersion(4, 6)) map_flags &= ~BPF_F_NO_PREALLOC;
     return map_flags;
 }
 
@@ -789,12 +790,14 @@ static int pinMap(const borrowed_fd& fd, const struct bpf_map_def& mapDef) {
 static bool isMapTypeSupported(enum bpf_map_type type) {
     if (type == BPF_MAP_TYPE_LPM_TRIE && !isAtLeastKernelVersion(4, 14)) {
         // On Linux Kernels older than 4.14 this map type doesn't exist - autoskip.
-        return false;
+        return true;  // created as HASH, see sanitizeMapType()
     }
     return true;
 }
 
 static enum bpf_map_type sanitizeMapType(enum bpf_map_type type) {
+    // LPM_TRIE is 4.11+; approximate with HASH so the pinned map userspace expects exists
+    if (type == BPF_MAP_TYPE_LPM_TRIE && !isAtLeastKernelVersion(4, 14)) return BPF_MAP_TYPE_HASH;
     if (type == BPF_MAP_TYPE_DEVMAP && !isAtLeastKernelVersion(4, 14)) {
         // On Linux Kernels older than 4.14 this map type doesn't exist, but it can kind
         // of be approximated: ARRAY has the same userspace api, though it is not usable
@@ -818,6 +821,11 @@ static enum bpf_map_type sanitizeMapType(enum bpf_map_type type) {
     // No sanitization is required.
     return type;
 }
+
+// Android 16 tags the lowest map/program variants 4.9+ (Android 15 used KVER_NONE),
+// so on 4.4 nothing would be created. Select them as if running 4.9.
+static const unsigned selKernelVer =
+        kernelVer < ((4u << 24) | (9u << 16)) ? ((4u << 24) | (9u << 16)) : kernelVer;
 
 static int createMaps(ElfObject& elfObj, vector<struct bpf_map_def>& md, vector<unique_fd>& mapFds) {
     int ret = 0;
@@ -856,14 +864,14 @@ static int createMaps(ElfObject& elfObj, vector<struct bpf_map_def>& md, vector<
             continue;
         }
 
-        if (kernelVer < md[i].min_kver) {
+        if (selKernelVer < md[i].min_kver) {
             ALOGD("skipping map %s which requires kernel version 0x%x >= 0x%x",
                   md[i].name(), kernelVer, md[i].min_kver);
             mapFds.push_back(unique_fd());
             continue;
         }
 
-        if (kernelVer >= md[i].max_kver) {
+        if (selKernelVer >= md[i].max_kver) {
             ALOGD("skipping map %s which requires kernel version 0x%x < 0x%x",
                   md[i].name(), kernelVer, md[i].max_kver);
             mapFds.push_back(unique_fd());
@@ -1079,8 +1087,8 @@ static int loadCodeSections(ElfObject& elfObj, vector<codeSection>& cs, const st
               cs[i].prog_def->min_kver, cs[i].prog_def->max_kver,
               cs[i].prog_def->bpfloader_min_ver, cs[i].prog_def->bpfloader_max_ver);
 
-        if (kernelVer < cs[i].prog_def->min_kver) continue;
-        if (kernelVer >= cs[i].prog_def->max_kver) continue;
+        if (selKernelVer < cs[i].prog_def->min_kver) continue;
+        if (selKernelVer >= cs[i].prog_def->max_kver) continue;
         if (api_level_full < cs[i].prog_def->bpfloader_min_ver) continue;
         if (api_level_full >= cs[i].prog_def->bpfloader_max_ver) continue;
 
@@ -1168,7 +1176,7 @@ static int prepareLoadMaps(const struct bpf_object* obj, const vector<struct bpf
             continue;
         }
 
-        if (kernelVer < md[i].min_kver || kernelVer >= md[i].max_kver) {
+        if (selKernelVer < md[i].min_kver || selKernelVer >= md[i].max_kver) {
             ALOGD("skipping map %s: kernel version 0x%x is outside required range [0x%x, 0x%x)",
                   md[i].name(), kernelVer, md[i].min_kver, md[i].max_kver);
             bpf_map__set_autocreate(m, false);
@@ -1202,7 +1210,7 @@ static int prepareLoadProgs(const struct bpf_object* obj, const vector<codeSecti
 
         unsigned min_kver = cs[i].prog_def->min_kver;
         unsigned max_kver = cs[i].prog_def->max_kver;
-        if (kernelVer < min_kver || kernelVer >= max_kver) {
+        if (selKernelVer < min_kver || selKernelVer >= max_kver) {
             ALOGD("skipping prog %s: kernel version 0x%x is outside required range [0x%x, 0x%x)",
                   cs[i].prog_def->name(), kernelVer, min_kver, max_kver);
             bpf_program__set_autoload(prog, false);
